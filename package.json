@@ -1,0 +1,47 @@
+{
+  "name": "finserv-platform",
+  "version": "2.4.1",
+  "description": "FinServ Co internal banking and transaction platform",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "build": "tsc",
+    "test": "jest --coverage",
+    "test:unit": "jest --testPathPattern=tests/unit",
+    "test:e2e": "jest --testPathPattern=tests/e2e",
+    "lint": "eslint src/ --ext .js,.ts",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "node scripts/seed.js",
+    "deploy:staging": "scripts/deploy.sh staging",
+    "deploy:production": "scripts/deploy.sh production"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.0",
+    "bcrypt": "^5.1.0",
+    "prisma": "^5.0.0",
+    "@prisma/client": "^5.0.0",
+    "redis": "^4.6.0",
+    "bull": "^4.10.0",
+    "helmet": "^7.0.0",
+    "cors": "^2.8.5",
+    "winston": "^3.10.0",
+    "joi": "^17.9.0",
+    "axios": "^1.4.0",
+    "lodash": "^4.17.21",
+    "moment": "^2.29.4",
+    "uuid": "^9.0.0",
+    "dotenv": "^16.3.0"
+  },
+  "devDependencies": {
+    "jest": "^29.6.0",
+    "nodemon": "^3.0.0",
+    "eslint": "^8.44.0",
+    "typescript": "^5.1.0",
+    "supertest": "^6.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
