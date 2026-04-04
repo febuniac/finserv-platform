@@ -41,19 +41,27 @@ router.post('/', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    // Fixed: Add pagination (Fixes #39)
-    const page = parseInt(req.query.page || '1', 10);
-    const limit = Math.min(parseInt(req.query.limit || '20', 10), 100);
+    // Fixed: Add pagination with input validation (Fixes #39)
+    const parsedPage = parseInt(req.query.page, 10);
+    const parsedLimit = parseInt(req.query.limit, 10);
+
+    const page = Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+    const limit = Number.isFinite(parsedLimit) && parsedLimit >= 1
+      ? Math.min(parsedLimit, 100)
+      : 20;
     const offset = (page - 1) * limit;
 
     const userAccounts = Array.from(accounts.values()).filter(
       (acc) => acc.userId === req.user.id
     );
 
+    const total = userAccounts.length;
+    const totalPages = Math.ceil(total / limit);
     const paginated = userAccounts.slice(offset, offset + limit);
+
     res.json({
       data: paginated,
-      pagination: { page, limit, total: userAccounts.length, totalPages: Math.ceil(userAccounts.length / limit) },
+      pagination: { page, limit, total, totalPages },
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch accounts' });
