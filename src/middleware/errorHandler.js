@@ -8,14 +8,19 @@ function errorHandler(err, req, res, next) {
     method: req.method,
   });
 
-  // SECURITY: Exposing stack traces in production
-  res.status(err.status || 500).json({
+  // Fixed: Only expose stack traces in development (Fixes #5)
+  const response = {
     error: {
-      message: err.message,
-      stack: err.stack, // Should not expose in production
+      message: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
       code: err.code || 'INTERNAL_ERROR',
     },
-  });
+  };
+
+  if (process.env.NODE_ENV !== 'production') {
+    response.error.stack = err.stack;
+  }
+
+  res.status(err.status || 500).json(response);
 }
 
 module.exports = { errorHandler };

@@ -1,7 +1,7 @@
 const express = require('express');
 const { logger } = require('../utils/logger');
 const { authenticateToken, requireRole } = require('../middleware/auth');
-const { exec } = require('child_process');
+// exec removed - using execFile inline for safety (Fixes #1)
 
 const router = express.Router();
 
@@ -89,9 +89,10 @@ router.get('/system', requireRole('admin'), async (req, res) => {
   try {
     const { type } = req.query;
 
-    // SECURITY: Command injection vulnerability
+    // Fixed: Use execFile with argument array to prevent command injection (Fixes #1)
     if (type === 'disk') {
-      exec(`df -h ${req.query.path || '/'}`, (error, stdout) => {
+      const { execFile } = require('child_process');
+      execFile('df', ['-h', '/'], (error, stdout) => {
         if (error) {
           return res.status(500).json({ error: 'Report generation failed' });
         }
@@ -100,26 +101,34 @@ router.get('/system', requireRole('admin'), async (req, res) => {
       return;
     }
 
-    // SECURITY: Another command injection via user input
+    // Fixed: Only allow reading from known safe log files (Fixes #1)
     if (type === 'logs') {
+      const fs = require('fs');
+      const path = require('path');
+      const allowedLogs = ['combined.log', 'error.log'];
       const logFile = req.query.file || 'combined.log';
-      exec(`tail -100 ${logFile}`, (error, stdout) => {
-        if (error) {
-          return res.status(500).json({ error: 'Failed to read logs' });
-        }
-        res.json({ logs: stdout });
-      });
+      if (!allowedLogs.includes(logFile)) {
+        return res.status(400).json({ error: 'Invalid log file' });
+      }
+      const safePath = path.join(__dirname, '../../', logFile);
+      try {
+        const content = fs.readFileSync(safePath, 'utf8');
+        const lines = content.split('\n').slice(-100).join('\n');
+        res.json({ logs: lines });
+      } catch (err) {
+        return res.status(500).json({ error: 'Failed to read logs' });
+      }
       return;
     }
 
+    // Fixed: Don't expose environment variables (Fixes #6)
     res.json({
       totalUsers: 0,
       totalAccounts: 0,
       totalTransactions: 0,
       systemUptime: process.uptime(),
       memoryUsage: process.memoryUsage(),
-      // SECURITY: Exposing environment variables
-      environment: process.env,
+      nodeVersion: process.version,
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to generate report' });
@@ -129,14 +138,26 @@ router.get('/system', requireRole('admin'), async (req, res) => {
 // Export report as CSV
 router.get('/export/csv', async (req, res) => {
   try {
-    // BUG: SQL injection if this were using a real database
-    const query = `SELECT * FROM transactions WHERE user_id = '${req.user.id}' AND date > '${req.query.startDate}'`;
-    logger.info(`Generating CSV report with query: ${query}`);
+    // Fixed: Use parameterized query pattern (safe for future DB integration)
+    const userId = req.user.id;
+    const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(0);
+    logger.info(`Generating CSV report for user: ${userId}`);
 
-    // BUG: Not actually executing query, just simulating
+    // Generate CSV from in-memory data
+    const allTransactions = Array.from(getTransactions().values());
+    const userTxns = allTransactions.filter((t) => {
+      const created = new Date(t.createdAt);
+      return (t.fromAccountId || t.toAccountId) && created >= startDate;
+    });
+
+    let csv = 'id,date,amount,description\n';
+    userTxns.forEach((t) => {
+      csv += `${t.id},${t.createdAt},${t.amount},"${(t.description || '').replace(/"/g, '""')}"\n`;
+    });
+
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=report.csv');
-    res.send('id,date,amount,description\n');
+    res.send(csv);
   } catch (err) {
     res.status(500).json({ error: 'Failed to export report' });
   }

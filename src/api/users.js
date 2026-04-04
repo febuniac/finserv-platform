@@ -17,8 +17,9 @@ router.get('/profile', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // BUG: Returning sensitive fields including password hash
-    res.json(user);
+    // Fixed: Strip password hash from response (Fixes #36)
+    const { password, ...safeUser } = user;
+    res.json(safeUser);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch profile' });
   }
@@ -31,12 +32,20 @@ router.put('/profile', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // SECURITY: Mass assignment vulnerability - user can change their own role
-    const updated = { ...user, ...req.body, updatedAt: new Date() };
+    // Fixed: Only allow safe fields to be updated (Fixes #15)
+    const allowedFields = ['name'];
+    const updates = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = typeof req.body[field] === 'string' ? req.body[field].replace(/<[^>]*>/g, '') : req.body[field];
+      }
+    }
+    const updated = { ...user, ...updates, updatedAt: new Date() };
     users.set(req.user.email, updated);
 
     logger.info(`Profile updated for ${req.user.email}`);
-    res.json(updated);
+    const { password, ...safeUpdated } = updated;
+    res.json(safeUpdated);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update profile' });
   }
@@ -45,8 +54,8 @@ router.put('/profile', async (req, res) => {
 // Admin endpoint
 router.get('/all', requireRole('admin'), async (req, res) => {
   try {
-    // SECURITY: Returns all user data including password hashes
-    const allUsers = Array.from(users.values());
+    // Fixed: Strip password hashes from response (Fixes #36)
+    const allUsers = Array.from(users.values()).map(({ password, ...safe }) => safe);
     res.json(allUsers);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch users' });
