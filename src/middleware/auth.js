@@ -11,8 +11,41 @@ const JWT_SECRET = process.env.JWT_SECRET || (() => {
   return crypto.randomBytes(32).toString('hex');
 })();
 
-// Token blacklist for revocation (Fixes #18)
-const revokedTokens = new Set();
+// Short-lived access tokens (15 min) with refresh tokens (7 days) (Fixes #18)
+const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY || '15m';
+const REFRESH_TOKEN_EXPIRY_MS = parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || '7', 10) * 24 * 60 * 60 * 1000;
+
+// Token blacklist for revocation with expiry tracking (Fixes #18)
+// Maps token -> expiry timestamp so we can clean up expired entries
+const revokedTokens = new Map();
+
+// Refresh token store: maps refreshToken -> { userId, email, role, expiresAt } (Fixes #18)
+const refreshTokens = new Map();
+
+// Periodic cleanup of expired entries to prevent memory leaks (Fixes #18)
+const CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
+let _cleanupTimer = null;
+
+function _startCleanupTimer() {
+  if (_cleanupTimer) return;
+  _cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [token, expiresAt] of revokedTokens.entries()) {
+      if (now > expiresAt) {
+        revokedTokens.delete(token);
+      }
+    }
+    for (const [token, data] of refreshTokens.entries()) {
+      if (now > data.expiresAt) {
+        refreshTokens.delete(token);
+      }
+    }
+  }, CLEANUP_INTERVAL_MS);
+  // Allow the process to exit without waiting for the timer
+  if (_cleanupTimer.unref) _cleanupTimer.unref();
+}
+
+_startCleanupTimer();
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -24,6 +57,7 @@ function authenticateToken(req, res, next) {
 
   // Check if token has been revoked (Fixes #18)
   if (revokedTokens.has(token)) {
+    logger.warn('Revoked token used in request');
     return res.status(401).json({ error: 'Token has been revoked' });
   }
 
@@ -142,7 +176,77 @@ function csrfProtection(req, res, next) {
 }
 
 function revokeToken(token) {
-  revokedTokens.add(token);
+  try {
+    // Decode (without verifying) to get the expiry so we can auto-clean later
+    const decoded = jwt.decode(token);
+    const expiresAt = decoded && decoded.exp ? decoded.exp * 1000 : Date.now() + 3600000;
+    revokedTokens.set(token, expiresAt);
+  } catch {
+    // If we can't decode, still blacklist with a 1-hour default TTL
+    revokedTokens.set(token, Date.now() + 3600000);
+  }
 }
 
-module.exports = { authenticateToken, requireRole, csrfProtection, revokeToken, JWT_SECRET };
+function storeRefreshToken(refreshToken, userData) {
+  refreshTokens.set(refreshToken, {
+    userId: userData.id,
+    email: userData.email,
+    role: userData.role,
+    expiresAt: Date.now() + REFRESH_TOKEN_EXPIRY_MS,
+  });
+}
+
+function validateRefreshToken(refreshToken) {
+  const data = refreshTokens.get(refreshToken);
+  if (!data) return null;
+  if (Date.now() > data.expiresAt) {
+    refreshTokens.delete(refreshToken);
+    return null;
+  }
+  return data;
+}
+
+function revokeRefreshToken(refreshToken) {
+  return refreshTokens.delete(refreshToken);
+}
+
+function revokeAllUserRefreshTokens(userId) {
+  for (const [token, data] of refreshTokens.entries()) {
+    if (data.userId === userId) {
+      refreshTokens.delete(token);
+    }
+  }
+}
+
+// Exposed for testing
+function _getRevokedTokens() {
+  return revokedTokens;
+}
+
+function _getRefreshTokens() {
+  return refreshTokens;
+}
+
+function _stopCleanupTimer() {
+  if (_cleanupTimer) {
+    clearInterval(_cleanupTimer);
+    _cleanupTimer = null;
+  }
+}
+
+module.exports = {
+  authenticateToken,
+  requireRole,
+  csrfProtection,
+  revokeToken,
+  storeRefreshToken,
+  validateRefreshToken,
+  revokeRefreshToken,
+  revokeAllUserRefreshTokens,
+  JWT_SECRET,
+  ACCESS_TOKEN_EXPIRY,
+  REFRESH_TOKEN_EXPIRY_MS,
+  _getRevokedTokens,
+  _getRefreshTokens,
+  _stopCleanupTimer,
+};

@@ -3,7 +3,16 @@ const jwt = require('jsonwebtoken');
 const { logger } = require('../utils/logger');
 const { hashPassword, verifyPassword, generateToken } = require('../utils/crypto');
 const { loginSchema, userSchema } = require('../utils/validation');
-const { JWT_SECRET } = require('../middleware/auth');
+const {
+  JWT_SECRET,
+  ACCESS_TOKEN_EXPIRY,
+  authenticateToken,
+  revokeToken,
+  storeRefreshToken,
+  validateRefreshToken,
+  revokeRefreshToken,
+  revokeAllUserRefreshTokens,
+} = require('../middleware/auth');
 const { loginRateLimiter } = require('../middleware/rateLimiter');
 const { getStore } = require('../utils/persistentStore');
 
@@ -100,15 +109,24 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     // Clear failed attempts on successful login
     failedAttempts.delete(email);
 
-    // Fixed: Default expiry of 1h if JWT_EXPIRY not set
-    const token = jwt.sign(
+    // Fixed: Use short-lived access tokens with refresh tokens (Fixes #18)
+    const accessToken = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRY || '1h', algorithm: 'HS256' }
+      { expiresIn: ACCESS_TOKEN_EXPIRY, algorithm: 'HS256' }
     );
 
+    // Generate a cryptographically secure refresh token (Fixes #18)
+    const refreshToken = generateToken();
+    storeRefreshToken(refreshToken, { id: user.id, email: user.email, role: user.role });
+
     logger.info(`User logged in: ${email}`);
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
+    res.json({
+      accessToken,
+      refreshToken,
+      expiresIn: ACCESS_TOKEN_EXPIRY,
+      user: { id: user.id, email: user.email, name: user.name },
+    });
   } catch (err) {
     logger.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });
@@ -133,6 +151,95 @@ router.post('/reset-password', loginRateLimiter, async (req, res) => {
 
   // Fixed: Don't return token in response (Fixes #14)
   res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
+});
+
+// Logout endpoint - revokes access token and refresh token (Fixes #18)
+router.post('/logout', authenticateToken, (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const accessToken = authHeader && authHeader.split(' ')[1];
+
+    // Revoke the access token
+    if (accessToken) {
+      revokeToken(accessToken);
+    }
+
+    // Revoke the refresh token if provided
+    const { refreshToken } = req.body;
+    if (refreshToken) {
+      revokeRefreshToken(refreshToken);
+    }
+
+    logger.info(`User logged out: ${req.user.email}`);
+    res.json({ message: 'Successfully logged out' });
+  } catch (err) {
+    logger.error('Logout error:', err);
+    res.status(500).json({ error: 'Logout failed' });
+  }
+});
+
+// Logout from all devices - revokes all refresh tokens for the user (Fixes #18)
+router.post('/logout-all', authenticateToken, (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const accessToken = authHeader && authHeader.split(' ')[1];
+
+    // Revoke the current access token
+    if (accessToken) {
+      revokeToken(accessToken);
+    }
+
+    // Revoke all refresh tokens for this user
+    revokeAllUserRefreshTokens(req.user.id);
+
+    logger.info(`User logged out from all devices: ${req.user.email}`);
+    res.json({ message: 'Successfully logged out from all devices' });
+  } catch (err) {
+    logger.error('Logout-all error:', err);
+    res.status(500).json({ error: 'Logout failed' });
+  }
+});
+
+// Refresh token endpoint - issues new access token using valid refresh token (Fixes #18)
+router.post('/refresh-token', (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(400).json({ error: 'Refresh token is required' });
+    }
+
+    const tokenData = validateRefreshToken(refreshToken);
+    if (!tokenData) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+
+    // Issue a new short-lived access token
+    const accessToken = jwt.sign(
+      { id: tokenData.userId, email: tokenData.email, role: tokenData.role },
+      JWT_SECRET,
+      { expiresIn: ACCESS_TOKEN_EXPIRY, algorithm: 'HS256' }
+    );
+
+    // Rotate the refresh token for added security
+    revokeRefreshToken(refreshToken);
+    const newRefreshToken = generateToken();
+    storeRefreshToken(newRefreshToken, {
+      id: tokenData.userId,
+      email: tokenData.email,
+      role: tokenData.role,
+    });
+
+    logger.info(`Token refreshed for user: ${tokenData.email}`);
+    res.json({
+      accessToken,
+      refreshToken: newRefreshToken,
+      expiresIn: ACCESS_TOKEN_EXPIRY,
+    });
+  } catch (err) {
+    logger.error('Token refresh error:', err);
+    res.status(500).json({ error: 'Token refresh failed' });
+  }
 });
 
 module.exports = router;
