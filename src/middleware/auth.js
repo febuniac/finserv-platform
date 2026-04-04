@@ -51,17 +51,93 @@ function requireRole(...roles) {
   };
 }
 
-// Fixed: CSRF protection middleware (Fixes #16)
+// Fixed: CSRF protection middleware using double-submit cookie pattern (Fixes #16)
+// Generates a cryptographic CSRF token, sets it as a cookie, and validates
+// that state-changing requests include the matching token in the X-CSRF-Token header.
+// Also validates Origin/Referer headers as a secondary defense layer.
+
+function generateCsrfToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  cookieHeader.split(';').forEach(pair => {
+    const [name, ...rest] = pair.trim().split('=');
+    if (name) cookies[name.trim()] = rest.join('=').trim();
+  });
+  return cookies;
+}
+
 function csrfProtection(req, res, next) {
   const safeMethods = ['GET', 'HEAD', 'OPTIONS'];
-  if (safeMethods.includes(req.method)) return next();
+
+  // For safe methods, issue a CSRF token cookie if one is not already present
+  if (safeMethods.includes(req.method)) {
+    const cookies = parseCookies(req.headers.cookie);
+    if (!cookies['_csrf_token']) {
+      const token = generateCsrfToken();
+      res.cookie('_csrf_token', token, {
+        httpOnly: false,   // Client JS needs to read this for the header
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Strict',
+        path: '/',
+      });
+    }
+    return next();
+  }
+
+  // --- State-changing request (POST, PUT, DELETE, PATCH) ---
+
+  // 1. Origin / Referer validation
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
 
   const origin = req.headers['origin'];
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
+  const referer = req.headers['referer'];
 
-  if (origin && !allowedOrigins.includes(origin)) {
-    return res.status(403).json({ error: 'CSRF validation failed' });
+  if (origin) {
+    if (!allowedOrigins.includes(origin)) {
+      logger.warn(`CSRF origin mismatch: ${origin}`);
+      return res.status(403).json({ error: 'CSRF validation failed: origin not allowed' });
+    }
+  } else if (referer) {
+    // Fall back to Referer when Origin is absent
+    try {
+      const refererOrigin = new URL(referer).origin;
+      if (!allowedOrigins.includes(refererOrigin)) {
+        logger.warn(`CSRF referer mismatch: ${referer}`);
+        return res.status(403).json({ error: 'CSRF validation failed: referer not allowed' });
+      }
+    } catch {
+      return res.status(403).json({ error: 'CSRF validation failed: invalid referer' });
+    }
+  } else {
+    // Neither Origin nor Referer present – block the request
+    logger.warn('CSRF validation failed: no origin or referer header');
+    return res.status(403).json({ error: 'CSRF validation failed: missing origin' });
   }
+
+  // 2. Double-submit cookie validation
+  const cookies = parseCookies(req.headers.cookie);
+  const cookieToken = cookies['_csrf_token'];
+  const headerToken = req.headers['x-csrf-token'];
+
+  if (!cookieToken || !headerToken) {
+    logger.warn('CSRF token missing from cookie or header');
+    return res.status(403).json({ error: 'CSRF validation failed: missing token' });
+  }
+
+  // Constant-time comparison to prevent timing attacks
+  if (cookieToken.length !== headerToken.length ||
+      !crypto.timingSafeEqual(Buffer.from(cookieToken), Buffer.from(headerToken))) {
+    logger.warn('CSRF token mismatch');
+    return res.status(403).json({ error: 'CSRF validation failed: token mismatch' });
+  }
+
   next();
 }
 
