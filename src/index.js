@@ -43,7 +43,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   maxAge: 86400,
 };
 app.use(cors(corsOptions));
@@ -71,6 +71,17 @@ app.use('/api/accounts', accountRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/reports', reportRoutes);
+
+// CSRF token endpoint – clients call this to obtain a token for state-changing requests
+app.get('/api/csrf-token', (req, res) => {
+  // The csrfProtection middleware already sets the cookie on GET requests.
+  // Read it back so the client has the value without parsing cookies themselves.
+  const crypto = require('crypto');
+  const cookieHeader = req.headers.cookie || '';
+  const match = cookieHeader.match(/(?:^|;\s*)_csrf_token=([^;]+)/);
+  const token = match ? match[1] : res.getHeader('set-cookie')?.toString().match(/_csrf_token=([^;]+)/)?.[1];
+  res.json({ csrfToken: token || null });
+});
 
 // Health check
 app.get('/health', (req, res) => {
