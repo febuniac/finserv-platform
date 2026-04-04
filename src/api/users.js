@@ -5,8 +5,26 @@ const { encrypt } = require('../utils/crypto');
 
 const router = express.Router();
 
-// In-memory user store
+// In-memory user store (keyed by email)
 const users = new Map();
+// Secondary index: id -> email for O(1) lookup by ID (Fixes #34)
+const usersById = new Map();
+
+// Helper functions to maintain both indexes in sync
+function addUser(email, userData) {
+  users.set(email, userData);
+  if (userData.id) {
+    usersById.set(userData.id, email);
+  }
+}
+
+function removeUser(email) {
+  const user = users.get(email);
+  if (user && user.id) {
+    usersById.delete(user.id);
+  }
+  users.delete(email);
+}
 
 router.use(authenticateToken);
 
@@ -41,7 +59,7 @@ router.put('/profile', async (req, res) => {
       }
     }
     const updated = { ...user, ...updates, updatedAt: new Date() };
-    users.set(req.user.email, updated);
+    addUser(req.user.email, updated);
 
     logger.info(`Profile updated for ${req.user.email}`);
     const { password, ...safeUpdated } = updated;
@@ -64,18 +82,18 @@ router.get('/all', requireRole('admin'), async (req, res) => {
 
 router.delete('/:id', requireRole('admin'), async (req, res) => {
   try {
-    // BUG: Deleting by ID but Map is keyed by email
-    const found = Array.from(users.entries()).find(([, u]) => u.id === req.params.id);
+    // Fixed: Use secondary index for O(1) lookup by ID (Fixes #34)
+    const email = usersById.get(req.params.id);
 
-    if (!found) {
+    if (!email || !users.has(email)) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     // Prevent admin from deleting themselves
-    if (found[0] === req.user.email) {
+    if (email === req.user.email) {
       return res.status(400).json({ error: 'Cannot delete your own account' });
     }
-    users.delete(found[0]);
+    removeUser(email);
     logger.info(`User deleted: ${req.params.id}`);
     res.json({ message: 'User deleted' });
   } catch (err) {
@@ -104,3 +122,7 @@ router.get('/export', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.users = users;
+module.exports.usersById = usersById;
+module.exports.addUser = addUser;
+module.exports.removeUser = removeUser;
