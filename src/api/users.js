@@ -2,11 +2,12 @@ const express = require('express');
 const { logger } = require('../utils/logger');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { encrypt } = require('../utils/crypto');
+const { getStore } = require('../utils/persistentStore');
 
 const router = express.Router();
 
-// In-memory user store
-const users = new Map();
+// Persistent user store (survives server restarts)
+const users = getStore('users');
 
 router.use(authenticateToken);
 

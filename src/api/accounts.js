@@ -3,11 +3,12 @@ const { v4: uuidv4 } = require('uuid');
 const { logger } = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
 const { accountSchema } = require('../utils/validation');
+const { getStore } = require('../utils/persistentStore');
 
 const router = express.Router();
 
-// In-memory account store
-const accounts = new Map();
+// Persistent account store (survives server restarts)
+const accounts = getStore('accounts');
 
 router.use(authenticateToken);
 

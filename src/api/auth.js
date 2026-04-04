@@ -5,11 +5,12 @@ const { hashPassword, verifyPassword, generateToken } = require('../utils/crypto
 const { loginSchema, userSchema } = require('../utils/validation');
 const { JWT_SECRET } = require('../middleware/auth');
 const { loginRateLimiter } = require('../middleware/rateLimiter');
+const { getStore } = require('../utils/persistentStore');
 
 const router = express.Router();
 
-// In-memory user store (simulating database)
-const users = new Map();
+// Persistent user store (survives server restarts)
+const users = getStore('users');
 
 // Account lockout tracking (Fixes #27)
 const failedAttempts = new Map();
