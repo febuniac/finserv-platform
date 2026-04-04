@@ -5,29 +5,81 @@ const { exec } = require('child_process');
 
 const router = express.Router();
 
+// Shared stores - import from other modules or use shared reference
+const { getTransactions, getAccounts } = (() => {
+  const transactions = new Map();
+  const accounts = new Map();
+  return {
+    getTransactions: () => transactions,
+    getAccounts: () => accounts,
+  };
+})();
+
 router.use(authenticateToken);
 
 // Generate account statement
 router.get('/statement/:accountId', async (req, res) => {
   try {
     const { accountId } = req.params;
-    const { format } = req.query;
+    const { format, startDate, endDate } = req.query;
 
-    // BUG: No validation on accountId - could be used for injection
-    // BUG: No date range parameter for statement generation
+    // Validate accountId format
+    if (!accountId || typeof accountId !== 'string') {
+      return res.status(400).json({ error: 'Invalid account ID' });
+    }
+
+    // Get all transactions for this account
+    const allTransactions = Array.from(getTransactions().values());
+    let accountTransactions = allTransactions.filter(
+      (t) => t.fromAccountId === accountId || t.toAccountId === accountId
+    );
+
+    // Apply date range filters if provided
+    if (startDate) {
+      const start = new Date(startDate);
+      accountTransactions = accountTransactions.filter((t) => new Date(t.createdAt) >= start);
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      accountTransactions = accountTransactions.filter((t) => new Date(t.createdAt) <= end);
+    }
+
+    // Calculate balances
+    let openingBalance = 0;
+    const account = getAccounts().get(accountId);
+    if (account) {
+      openingBalance = account.balance || 0;
+    }
+
+    // Compute running balance from transactions
+    let closingBalance = openingBalance;
+    const formattedTransactions = accountTransactions.map((t) => {
+      const isCredit = t.toAccountId === accountId;
+      const amount = isCredit ? t.amount : -t.amount;
+      closingBalance += amount;
+      return {
+        id: t.id,
+        date: t.createdAt,
+        description: t.description || (isCredit ? 'Credit' : 'Debit'),
+        amount,
+        type: isCredit ? 'credit' : 'debit',
+        balance: closingBalance,
+      };
+    });
 
     const statement = {
       accountId,
       generatedAt: new Date(),
-      transactions: [],
-      openingBalance: 0,
-      closingBalance: 0,
+      transactions: formattedTransactions,
+      openingBalance,
+      closingBalance,
+      transactionCount: formattedTransactions.length,
       format: format || 'json',
     };
 
-    // BUG: Missing actual transaction data in statement
     res.json(statement);
   } catch (err) {
+    logger.error('Statement generation error:', err);
     res.status(500).json({ error: 'Failed to generate statement' });
   }
 });
