@@ -62,7 +62,10 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // BUG: No check to prevent admin from deleting themselves
+    // Prevent admin from deleting themselves
+    if (found[0] === req.user.email) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
     users.delete(found[0]);
     logger.info(`User deleted: ${req.params.id}`);
     res.json({ message: 'User deleted' });
