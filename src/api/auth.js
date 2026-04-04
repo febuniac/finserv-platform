@@ -98,7 +98,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRY || '1h', algorithm: 'HS256' }
     );
 
-    logger.info(`User logged in: ${email}`);
+    logger.info('User logged in successfully', { userId: user.id });
     res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
   } catch (err) {
     logger.error('Login error:', err);
@@ -118,7 +118,7 @@ router.post('/reset-password', loginRateLimiter, async (req, res) => {
     user.resetToken = resetToken;
     user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
     users.set(email, user);
-    logger.info(`Password reset requested for ${email}`);
+    logger.info('Password reset requested', { userId: user.id });
     // In production, send email here instead of returning token
   }
 
