@@ -66,6 +66,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     if (attempts && attempts.count >= MAX_FAILED_ATTEMPTS) {
       const elapsed = Date.now() - attempts.lastAttempt;
       if (elapsed < LOCKOUT_DURATION) {
+        const remainingMs = LOCKOUT_DURATION - elapsed;
+        logger.warn(`Locked account login attempt: ${email} (${Math.ceil(remainingMs / 60000)} min remaining)`);
         return res.status(423).json({ error: 'Account locked. Try again later.' });
       }
       failedAttempts.delete(email);
@@ -75,6 +77,9 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
     // Fixed: Use generic error message to prevent user enumeration (Fixes #24)
     if (!user) {
+      // Track failed attempts even for non-existent users to prevent enumeration brute-force
+      const current = failedAttempts.get(email) || { count: 0, lastAttempt: Date.now() };
+      failedAttempts.set(email, { count: current.count + 1, lastAttempt: Date.now() });
       // Hash a dummy password to prevent timing attacks
       hashPassword('dummy-password');
       return res.status(401).json({ error: 'Invalid email or password' });
@@ -82,9 +87,13 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
     // Fixed: Use verifyPassword with timing-safe comparison
     if (!verifyPassword(password, user.password)) {
-      // Track failed attempts (Fixes #27)
-      const current = failedAttempts.get(email) || { count: 0 };
-      failedAttempts.set(email, { count: current.count + 1, lastAttempt: Date.now() });
+        // Track failed attempts (Fixes #27)
+        const current = failedAttempts.get(email) || { count: 0, lastAttempt: Date.now() };
+        const newCount = current.count + 1;
+        failedAttempts.set(email, { count: newCount, lastAttempt: Date.now() });
+        if (newCount >= MAX_FAILED_ATTEMPTS) {
+          logger.warn(`Account locked due to ${MAX_FAILED_ATTEMPTS} failed login attempts: ${email}`);
+        }
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
@@ -127,3 +136,6 @@ router.post('/reset-password', loginRateLimiter, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.failedAttempts = failedAttempts;
+module.exports.MAX_FAILED_ATTEMPTS = MAX_FAILED_ATTEMPTS;
+module.exports.LOCKOUT_DURATION = LOCKOUT_DURATION;
