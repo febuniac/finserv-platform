@@ -66,6 +66,10 @@ router.post('/transfer', async (req, res) => {
       fromAccount.balance = (fromBalanceCents - amountCents) / 100;
       toAccount.balance = (Math.round(toAccount.balance * 100) + amountCents) / 100;
 
+      // Persist updated balances (required since encrypted store returns copies)
+      accounts.set(fromAccountId, fromAccount);
+      accounts.set(toAccountId, toAccount);
+
       const transaction = {
         id: uuidv4(),
         fromAccountId,
@@ -176,10 +180,15 @@ router.post('/:id/cancel', async (req, res) => {
       const amountCents = Math.round(transaction.amount * 100);
       fromAccount.balance = (Math.round(fromAccount.balance * 100) + amountCents) / 100;
       toAccount.balance = (Math.round(toAccount.balance * 100) - amountCents) / 100;
+
+      // Persist updated balances (required since encrypted store returns copies)
+      accounts.set(transaction.fromAccountId, fromAccount);
+      accounts.set(transaction.toAccountId, toAccount);
     }
 
     transaction.status = 'cancelled';
     transaction.cancelledAt = new Date();
+    transactions.set(req.params.id, transaction);
     res.json({ message: 'Transaction cancelled and balances reversed', transaction });
   } catch (err) {
     res.status(500).json({ error: 'Failed to cancel transaction' });
