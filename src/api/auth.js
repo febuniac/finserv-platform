@@ -5,6 +5,7 @@ const { hashPassword, verifyPassword, generateToken } = require('../utils/crypto
 const { loginSchema, userSchema } = require('../utils/validation');
 const { JWT_SECRET } = require('../middleware/auth');
 const { loginRateLimiter } = require('../middleware/rateLimiter');
+const { sendPasswordResetEmail } = require('../services/notificationService');
 
 const router = express.Router();
 
@@ -109,19 +110,18 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 router.post('/reset-password', loginRateLimiter, async (req, res) => {
   const { email } = req.body;
 
-  // Fixed: Always return same response regardless of whether email exists (Fixes #24)
-  // Fixed: Use cryptographically secure token (Fixes #14)
+  // Always return same response regardless of whether email exists (Fixes #24)
+  res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
+
+  // Send the email asynchronously after responding to prevent timing leaks (Fixes #28)
   const user = users.get(email);
   if (user) {
-    const resetToken = generateToken();
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
-    logger.info(`Password reset requested for ${email}`);
-    // In production, send email here instead of returning token
+    try {
+      await sendPasswordResetEmail(email);
+    } catch (err) {
+      logger.error(`Failed to send password reset email to ${email}:`, err.message);
+    }
   }
-
-  // Fixed: Don't return token in response (Fixes #14)
-  res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
 });
 
 module.exports = router;

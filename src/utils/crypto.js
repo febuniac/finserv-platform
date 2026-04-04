@@ -48,4 +48,49 @@ function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-module.exports = { encrypt, decrypt, hashPassword, verifyPassword, generateToken };
+/**
+ * Generate an HMAC-signed, time-limited password reset link.
+ * The link encodes the user's email, an expiry timestamp, and an HMAC signature
+ * so the raw reset token is never transmitted in the email.
+ *
+ * @param {string} email - The user's email address
+ * @param {number} [ttlMs=3600000] - Link validity in milliseconds (default: 1 hour)
+ * @returns {{ link: string, expiresAt: number }}
+ */
+function generateSecureResetLink(email, ttlMs = 3600000) {
+  const expiresAt = Date.now() + ttlMs;
+  const payload = `${email}:${expiresAt}`;
+  const key = getEncryptionKey();
+  const signature = crypto.createHmac('sha256', key).update(payload).digest('hex');
+  const token = Buffer.from(JSON.stringify({ email, expiresAt, signature })).toString('base64url');
+  const baseUrl = process.env.APP_BASE_URL || 'https://app.finserv.com';
+  return {
+    link: `${baseUrl}/reset-password?token=${token}`,
+    expiresAt,
+  };
+}
+
+/**
+ * Verify a password reset link token.
+ * Returns the email if valid, or null if expired/tampered.
+ *
+ * @param {string} token - The base64url-encoded token from the reset link
+ * @returns {string|null} The email address if valid, null otherwise
+ */
+function verifyResetToken(token) {
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64url').toString());
+    const { email, expiresAt, signature } = decoded;
+    if (Date.now() > expiresAt) return null;
+    const key = getEncryptionKey();
+    const expectedSig = crypto.createHmac('sha256', key).update(`${email}:${expiresAt}`).digest('hex');
+    if (!crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+      return null;
+    }
+    return email;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { encrypt, decrypt, hashPassword, verifyPassword, generateToken, generateSecureResetLink, verifyResetToken };
