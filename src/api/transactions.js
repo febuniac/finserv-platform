@@ -3,15 +3,16 @@ const { v4: uuidv4 } = require('uuid');
 const { logger } = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
 const { transactionSchema } = require('../utils/validation');
+const { getStore } = require('../utils/persistentStore');
 
 const router = express.Router();
 
-// In-memory stores
-const transactions = new Map();
-const accounts = new Map();
+// Persistent stores (survive server restarts)
+const transactions = getStore('transactions');
+const accounts = getStore('accounts');
 
-// Idempotency key tracking (Fixes #43)
-const processedIdempotencyKeys = new Map();
+// Persistent idempotency key tracking (Fixes #43)
+const processedIdempotencyKeys = getStore('idempotencyKeys');
 
 // Transfer lock to prevent race conditions (Fixes #9)
 const transferLocks = new Set();

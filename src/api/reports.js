@@ -1,19 +1,14 @@
 const express = require('express');
 const { logger } = require('../utils/logger');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { getStore } = require('../utils/persistentStore');
 // exec removed - using execFile inline for safety (Fixes #1)
 
 const router = express.Router();
 
-// Shared stores - import from other modules or use shared reference
-const { getTransactions, getAccounts } = (() => {
-  const transactions = new Map();
-  const accounts = new Map();
-  return {
-    getTransactions: () => transactions,
-    getAccounts: () => accounts,
-  };
-})();
+// Shared persistent stores (same instances used by accounts.js and transactions.js)
+const getTransactions = () => getStore('transactions');
+const getAccounts = () => getStore('accounts');
 
 router.use(authenticateToken);
 
