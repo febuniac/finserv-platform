@@ -41,11 +41,20 @@ router.post('/', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    // BUG: No pagination - returns all accounts, could be very slow with many records
+    // Fixed: Add pagination (Fixes #39)
+    const page = parseInt(req.query.page || '1', 10);
+    const limit = Math.min(parseInt(req.query.limit || '20', 10), 100);
+    const offset = (page - 1) * limit;
+
     const userAccounts = Array.from(accounts.values()).filter(
       (acc) => acc.userId === req.user.id
     );
-    res.json(userAccounts);
+
+    const paginated = userAccounts.slice(offset, offset + limit);
+    res.json({
+      data: paginated,
+      pagination: { page, limit, total: userAccounts.length, totalPages: Math.ceil(userAccounts.length / limit) },
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch accounts' });
   }
@@ -59,8 +68,11 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Account not found' });
     }
 
-    // SECURITY: IDOR - No check if the account belongs to the requesting user
-    // Any authenticated user can view any account
+    // Fixed: Check account ownership to prevent IDOR (Fixes #4)
+    if (account.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     res.json(account);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch account' });
@@ -75,9 +87,19 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Account not found' });
     }
 
-    // SECURITY: IDOR - No ownership check
-    // BUG: Allows updating balance directly, bypassing transaction system
-    const updated = { ...account, ...req.body, updatedAt: new Date() };
+    // Fixed: Check ownership (Fixes #4)
+    if (account.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Fixed: Only allow safe fields, prevent direct balance manipulation (Fixes #44)
+    const allowedFields = ['name', 'type', 'currency', 'status'];
+    const updates = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    }
+
+    const updated = { ...account, ...updates, updatedAt: new Date() };
     accounts.set(req.params.id, updated);
     res.json(updated);
   } catch (err) {
@@ -93,10 +115,23 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Account not found' });
     }
 
-    // BUG: Can delete account with non-zero balance
-    // BUG: No soft delete - hard deletes account and loses audit trail
-    accounts.delete(req.params.id);
-    logger.info(`Account deleted: ${req.params.id}`);
+    // Fixed: Check ownership
+    if (account.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Fixed: Prevent deletion of accounts with non-zero balance (Fixes #13)
+    if (account.balance !== 0) {
+      return res.status(400).json({ error: 'Cannot delete account with non-zero balance. Transfer or withdraw funds first.' });
+    }
+
+    // Fixed: Soft delete instead of hard delete (Fixes #45)
+    account.status = 'deleted';
+    account.deletedAt = new Date();
+    account.updatedAt = new Date();
+    accounts.set(req.params.id, account);
+
+    logger.info(`Account soft-deleted: ${req.params.id}`);
     res.json({ message: 'Account deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete account' });

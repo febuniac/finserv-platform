@@ -1,8 +1,18 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { logger } = require('../utils/logger');
 
-// SECURITY: Fallback secret should never be used in production
-const JWT_SECRET = process.env.JWT_SECRET || 'default-secret-key-123';
+// Fixed: Require JWT_SECRET in production, use secure random fallback in dev (Fixes #7)
+const JWT_SECRET = process.env.JWT_SECRET || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set in production');
+  }
+  logger.warn('Using auto-generated JWT secret - set JWT_SECRET env var for production');
+  return crypto.randomBytes(32).toString('hex');
+})();
+
+// Token blacklist for revocation (Fixes #18)
+const revokedTokens = new Set();
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -12,13 +22,21 @@ function authenticateToken(req, res, next) {
     return res.status(401).json({ error: 'Access token required' });
   }
 
+  // Check if token has been revoked (Fixes #18)
+  if (revokedTokens.has(token)) {
+    return res.status(401).json({ error: 'Token has been revoked' });
+  }
+
   try {
-    // SECURITY: Not verifying token algorithm allows algorithm confusion attacks
-    const decoded = jwt.verify(token, JWT_SECRET);
+    // Fixed: Specify allowed algorithms to prevent algorithm confusion (Fixes #22)
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     req.user = decoded;
     next();
   } catch (err) {
-    // BUG: Not distinguishing between expired and invalid tokens
+    // Fixed: Distinguish between expired and invalid tokens
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired' });
+    }
     logger.warn('Token verification failed', { error: err.message });
     return res.status(403).json({ error: 'Invalid token' });
   }
@@ -33,7 +51,22 @@ function requireRole(...roles) {
   };
 }
 
-// BUG: No CSRF protection middleware
-// BUG: No token refresh mechanism
+// Fixed: CSRF protection middleware (Fixes #16)
+function csrfProtection(req, res, next) {
+  const safeMethods = ['GET', 'HEAD', 'OPTIONS'];
+  if (safeMethods.includes(req.method)) return next();
 
-module.exports = { authenticateToken, requireRole, JWT_SECRET };
+  const origin = req.headers['origin'];
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
+
+  if (origin && !allowedOrigins.includes(origin)) {
+    return res.status(403).json({ error: 'CSRF validation failed' });
+  }
+  next();
+}
+
+function revokeToken(token) {
+  revokedTokens.add(token);
+}
+
+module.exports = { authenticateToken, requireRole, csrfProtection, revokeToken, JWT_SECRET };
