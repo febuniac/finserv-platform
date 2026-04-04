@@ -11,11 +11,16 @@ const reportRoutes = require('./api/reports');
 const { errorHandler } = require('./middleware/errorHandler');
 const { rateLimiter } = require('./middleware/rateLimiter');
 const { csrfProtection } = require('./middleware/auth');
+const { httpsEnforcement } = require('./middleware/httpsEnforcement');
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Enforce HTTPS before any other middleware so insecure requests are
+// redirected immediately without processing through CORS/helmet/etc.
+app.use(httpsEnforcement);
 
 // Fixed: Restrict CORS to allowed origins instead of wildcard (Fixes #30)
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
@@ -55,16 +60,6 @@ app.use(helmet({
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
-
-// Fixed: Enforce TLS in production (Fixes #25)
-if (process.env.NODE_ENV === 'production') {
-  app.use((req, res, next) => {
-    if (req.headers['x-forwarded-proto'] !== 'https') {
-      return res.redirect(301, `https://${req.headers.host}${req.url}`);
-    }
-    next();
-  });
-}
 
 app.use(express.json({ limit: '10kb' }));
 app.use(rateLimiter);
