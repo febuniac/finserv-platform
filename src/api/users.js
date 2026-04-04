@@ -82,8 +82,8 @@ router.get('/export', async (req, res) => {
     // SECURITY: Encrypting with weak DES algorithm from crypto.js
     const encryptedData = encrypt(JSON.stringify(user));
 
-    // BUG: Setting wrong content-type for encrypted data
-    res.setHeader('Content-Type', 'application/json');
+    // Fixed: Set correct content-type for encrypted binary data
+    res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', 'attachment; filename=user-data.enc');
     res.send(encryptedData);
   } catch (err) {
