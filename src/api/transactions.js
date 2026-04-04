@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const { logger } = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
 const { transactionSchema } = require('../utils/validation');
+const { AccountLock } = require('../utils/accountLock');
 
 const router = express.Router();
 
@@ -13,8 +14,8 @@ const accounts = new Map();
 // Idempotency key tracking (Fixes #43)
 const processedIdempotencyKeys = new Map();
 
-// Transfer lock to prevent race conditions (Fixes #9)
-const transferLocks = new Set();
+// Per-account mutex lock to prevent race conditions (Fixes #33, replaces #9 fix)
+const accountLock = new AccountLock();
 
 router.use(authenticateToken);
 
@@ -44,19 +45,15 @@ router.post('/transfer', async (req, res) => {
       return res.status(403).json({ error: 'You can only transfer from your own accounts' });
     }
 
-    // Fixed: Simple locking to prevent race conditions (Fixes #9)
-    const lockKey = `${fromAccountId}-${toAccountId}`;
-    if (transferLocks.has(lockKey)) {
-      return res.status(409).json({ error: 'Transfer in progress, please retry' });
-    }
-    transferLocks.add(lockKey);
-
-    try {
+    // Fixed: Per-account mutex ensures balance check + deduction are atomic
+    // Locks both accounts in sorted order to prevent deadlocks (Fixes #33)
+    const result = await accountLock.withLock([fromAccountId, toAccountId], async () => {
       // Fixed: Use integer arithmetic (cents) to avoid floating point issues (Fixes #10)
       const amountCents = Math.round(amount * 100);
       const fromBalanceCents = Math.round(fromAccount.balance * 100);
 
-      // Fixed: Check for overdraft (Fixes #33)
+      // Overdraft protection: check happens inside the lock so it cannot be
+      // interleaved with another concurrent deduction (Fixes #33)
       if (fromBalanceCents < amountCents) {
         return res.status(400).json({ error: 'Insufficient funds' });
       }
@@ -84,10 +81,8 @@ router.post('/transfer', async (req, res) => {
       }
 
       logger.info(`Transfer completed: ${transaction.id}, amount: ${amount}`);
-      res.status(201).json(transaction);
-    } finally {
-      transferLocks.delete(lockKey);
-    }
+      return res.status(201).json(transaction);
+    });
   } catch (err) {
     logger.error('Transfer error:', err);
     res.status(500).json({ error: 'Transfer failed' });
