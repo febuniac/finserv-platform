@@ -117,6 +117,7 @@ router.post('/reset-password', loginRateLimiter, async (req, res) => {
     const resetToken = generateToken();
     user.resetToken = resetToken;
     user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
+    users.set(email, user);
     logger.info(`Password reset requested for ${email}`);
     // In production, send email here instead of returning token
   }

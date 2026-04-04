@@ -1,13 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 const { logger } = require('./logger');
+const { encrypt, decrypt } = require('./crypto');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
 
 /**
- * A Map-like store that persists data to a JSON file on disk.
- * Maintains the same API as Map for minimal code changes,
- * while ensuring data survives server restarts.
+ * A Map-like store that persists data to disk with AES-256-CBC encryption.
+ * Values are encrypted both in memory and on disk to protect against
+ * memory dumps and unauthorized file access (PCI-DSS compliance).
+ * Maintains the same public API as Map for minimal code changes.
  */
 class PersistentStore {
   constructor(name) {
@@ -24,13 +26,35 @@ class PersistentStore {
     }
   }
 
+  _encryptValue(value) {
+    const json = JSON.stringify(value);
+    return encrypt(json);
+  }
+
+  _decryptValue(encrypted) {
+    const json = decrypt(encrypted);
+    return JSON.parse(json);
+  }
+
   _load() {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(this.filePath, 'utf8');
-        const entries = JSON.parse(raw);
-        this.data = new Map(entries);
-        logger.info(`PersistentStore "${this.name}" loaded ${this.data.size} entries from disk`);
+        const parsed = JSON.parse(raw);
+
+        if (parsed && parsed.encrypted === true && Array.isArray(parsed.data)) {
+          // Encrypted format - load directly
+          this.data = new Map(parsed.data);
+          logger.info(`PersistentStore "${this.name}" loaded ${this.data.size} encrypted entries from disk`);
+        } else if (Array.isArray(parsed)) {
+          // Legacy plaintext format - migrate to encrypted
+          this.data = new Map();
+          for (const [key, value] of parsed) {
+            this.data.set(key, this._encryptValue(value));
+          }
+          this._save();
+          logger.info(`PersistentStore "${this.name}" migrated ${this.data.size} entries to encrypted format`);
+        }
       }
     } catch (err) {
       logger.error(`PersistentStore "${this.name}" failed to load data:`, err.message);
@@ -41,7 +65,8 @@ class PersistentStore {
   _save() {
     try {
       const entries = Array.from(this.data.entries());
-      const json = JSON.stringify(entries, null, 2);
+      const payload = { encrypted: true, version: 1, data: entries };
+      const json = JSON.stringify(payload, null, 2);
       // Write to temp file then rename for atomicity
       const tmpPath = this.filePath + '.tmp';
       fs.writeFileSync(tmpPath, json, 'utf8');
@@ -52,11 +77,13 @@ class PersistentStore {
   }
 
   get(key) {
-    return this.data.get(key);
+    const encrypted = this.data.get(key);
+    if (encrypted === undefined) return undefined;
+    return this._decryptValue(encrypted);
   }
 
   set(key, value) {
-    this.data.set(key, value);
+    this.data.set(key, this._encryptValue(value));
     this._save();
     return this;
   }
@@ -74,11 +101,36 @@ class PersistentStore {
   }
 
   values() {
-    return this.data.values();
+    const self = this;
+    const iterator = this.data.values();
+    return {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            const result = iterator.next();
+            if (result.done) return result;
+            return { value: self._decryptValue(result.value), done: false };
+          },
+        };
+      },
+    };
   }
 
   entries() {
-    return this.data.entries();
+    const self = this;
+    const iterator = this.data.entries();
+    return {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            const result = iterator.next();
+            if (result.done) return result;
+            const [key, encrypted] = result.value;
+            return { value: [key, self._decryptValue(encrypted)], done: false };
+          },
+        };
+      },
+    };
   }
 
   keys() {
@@ -95,7 +147,9 @@ class PersistentStore {
   }
 
   forEach(callback) {
-    this.data.forEach(callback);
+    this.data.forEach((encrypted, key) => {
+      callback(this._decryptValue(encrypted), key);
+    });
   }
 }
 

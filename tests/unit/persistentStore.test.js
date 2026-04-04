@@ -98,13 +98,22 @@ describe('PersistentStore', () => {
       }
     });
 
-    it('should persist data to disk on set()', () => {
+    it('should persist encrypted data to disk on set()', () => {
       const store = new PersistentStore(storeName);
       store.set('user1', { email: 'alice@test.com', name: 'Alice' });
 
       expect(fs.existsSync(filePath)).toBe(true);
       const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      expect(raw).toEqual([['user1', { email: 'alice@test.com', name: 'Alice' }]]);
+      expect(raw.encrypted).toBe(true);
+      expect(raw.version).toBe(1);
+      expect(raw.data).toHaveLength(1);
+      expect(raw.data[0][0]).toBe('user1');
+      // Value should be an encrypted string, not plaintext
+      expect(typeof raw.data[0][1]).toBe('string');
+      expect(raw.data[0][1]).toContain(':');
+      // Plaintext should not appear in the file
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      expect(fileContent).not.toContain('alice@test.com');
     });
 
     it('should load persisted data on construction (simulating restart)', () => {
@@ -167,6 +176,110 @@ describe('PersistentStore', () => {
       // Store should initialize with empty data instead of crashing
       const store = new PersistentStore(storeName);
       expect(store.size).toBe(0);
+    });
+  });
+
+  describe('encryption at rest (Fixes #29)', () => {
+    const storeName = 'test-encryption';
+    const filePath = path.join(TEST_DATA_DIR, `${storeName}.json`);
+
+    afterEach(() => {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    });
+
+    it('should encrypt sensitive data so plaintext is not visible on disk', () => {
+      const store = new PersistentStore(storeName);
+      store.set('secret', { ssn: '123-45-6789', cardNumber: '4111111111111111' });
+
+      const raw = fs.readFileSync(filePath, 'utf8');
+      expect(raw).not.toContain('123-45-6789');
+      expect(raw).not.toContain('4111111111111111');
+    });
+
+    it('should decrypt values transparently on get()', () => {
+      const store = new PersistentStore(storeName);
+      store.set('user1', { name: 'Alice', balance: 1000 });
+
+      expect(store.get('user1')).toEqual({ name: 'Alice', balance: 1000 });
+    });
+
+    it('should store encrypted values in memory (not plaintext objects)', () => {
+      const store = new PersistentStore(storeName);
+      store.set('key1', { secret: 'sensitive-data' });
+
+      // Access the internal Map directly to verify encryption
+      const rawValue = store.data.get('key1');
+      expect(typeof rawValue).toBe('string');
+      expect(rawValue).not.toContain('sensitive-data');
+    });
+
+    it('should return undefined for missing keys', () => {
+      const store = new PersistentStore(storeName);
+      expect(store.get('nonexistent')).toBeUndefined();
+    });
+
+    it('should migrate legacy plaintext files to encrypted format', () => {
+      // Write a legacy plaintext file
+      if (!fs.existsSync(TEST_DATA_DIR)) {
+        fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+      }
+      const legacyData = [['user1', { email: 'test@test.com', name: 'Test' }]];
+      fs.writeFileSync(filePath, JSON.stringify(legacyData), 'utf8');
+
+      // Load it - should trigger migration
+      const store = new PersistentStore(storeName);
+      expect(store.get('user1')).toEqual({ email: 'test@test.com', name: 'Test' });
+
+      // File should now be in encrypted format
+      const rawStr = fs.readFileSync(filePath, 'utf8');
+      const raw = JSON.parse(rawStr);
+      expect(raw.encrypted).toBe(true);
+      expect(rawStr).not.toContain('test@test.com');
+    });
+
+    it('should decrypt values correctly in values() iterator', () => {
+      const store = new PersistentStore(storeName);
+      store.set('k1', { v: 1 });
+      store.set('k2', { v: 2 });
+
+      const values = Array.from(store.values());
+      expect(values).toEqual([{ v: 1 }, { v: 2 }]);
+    });
+
+    it('should decrypt values correctly in entries() iterator', () => {
+      const store = new PersistentStore(storeName);
+      store.set('k1', 'v1');
+      store.set('k2', 'v2');
+
+      const entries = Array.from(store.entries());
+      expect(entries).toEqual([['k1', 'v1'], ['k2', 'v2']]);
+    });
+
+    it('should decrypt values correctly in forEach()', () => {
+      const store = new PersistentStore(storeName);
+      store.set('a', 1);
+      store.set('b', 2);
+
+      const collected = {};
+      store.forEach((value, key) => {
+        collected[key] = value;
+      });
+      expect(collected).toEqual({ a: 1, b: 2 });
+    });
+
+    it('should persist and reload encrypted data across restarts', () => {
+      const store1 = new PersistentStore(storeName);
+      store1.set('account', { id: 'acc-1', balance: 5000, cardNumber: '4111111111111111' });
+
+      // Simulate restart
+      const store2 = new PersistentStore(storeName);
+      expect(store2.get('account')).toEqual({ id: 'acc-1', balance: 5000, cardNumber: '4111111111111111' });
+
+      // Verify file is still encrypted
+      const raw = fs.readFileSync(filePath, 'utf8');
+      expect(raw).not.toContain('4111111111111111');
     });
   });
 
