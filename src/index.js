@@ -18,19 +18,30 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Fixed: Restrict CORS to allowed origins instead of wildcard (Fixes #30)
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
-app.use(cors({
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow requests with no origin (e.g. server-to-server, curl)
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      logger.warn(`CORS request blocked from origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+  maxAge: 86400,
+};
+app.use(cors(corsOptions));
 
 // Fixed: Enhanced security headers (Fixes #21)
 app.use(helmet({
@@ -74,8 +85,10 @@ app.get('/health', (req, res) => {
 // Error handler
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  logger.info(`FinServ Platform running on port ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    logger.info(`FinServ Platform running on port ${PORT}`);
+  });
+}
 
 module.exports = app;
