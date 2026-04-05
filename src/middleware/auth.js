@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { logger } = require('../utils/logger');
+const { getStore } = require('../utils/persistentStore');
 
 // Fixed: Require JWT_SECRET in production, use secure random fallback in dev (Fixes #7)
 const JWT_SECRET = process.env.JWT_SECRET || (() => {
@@ -44,9 +45,24 @@ function authenticateToken(req, res, next) {
 
 function requireRole(...roles) {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    if (!req.user) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
+
+    // Fixed: Verify role from database instead of trusting JWT claim (Fixes #22)
+    const users = getStore('users');
+    const user = users.get(req.user.email);
+    if (!user) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    if (!roles.includes(user.role)) {
+      logger.warn(`Role authorization denied for ${req.user.email}: has '${user.role}', needs one of [${roles.join(', ')}]`);
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    // Update req.user.role with the verified database role
+    req.user.role = user.role;
     next();
   };
 }
