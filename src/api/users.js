@@ -3,6 +3,7 @@ const { logger } = require('../utils/logger');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { encrypt } = require('../utils/crypto');
 const { getStore } = require('../utils/persistentStore');
+const { sanitizeString } = require('../utils/sanitize');
 
 const router = express.Router();
 
@@ -38,7 +39,7 @@ router.put('/profile', async (req, res) => {
     const updates = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
-        updates[field] = typeof req.body[field] === 'string' ? req.body[field].replace(/<[^>]*>/g, '') : req.body[field];
+        updates[field] = typeof req.body[field] === 'string' ? sanitizeString(req.body[field]) : req.body[field];
       }
     }
     const updated = { ...user, ...updates, updatedAt: new Date() };

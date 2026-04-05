@@ -4,6 +4,7 @@ const { logger } = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
 const { accountSchema } = require('../utils/validation');
 const { getStore } = require('../utils/persistentStore');
+const { sanitizeString } = require('../utils/sanitize');
 
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.post('/', async (req, res) => {
     const account = {
       id: uuidv4(),
       userId: req.user.id,
-      name: value.name,
+      name: sanitizeString(value.name),
       type: value.type,
       currency: value.currency,
       balance: value.initialBalance,
@@ -105,7 +106,11 @@ router.put('/:id', async (req, res) => {
     const allowedFields = ['name', 'type', 'currency', 'status'];
     const updates = {};
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) updates[field] = req.body[field];
+      if (req.body[field] !== undefined) {
+        updates[field] = typeof req.body[field] === 'string'
+          ? sanitizeString(req.body[field])
+          : req.body[field];
+      }
     }
 
     const updated = { ...account, ...updates, updatedAt: new Date() };

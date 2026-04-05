@@ -4,6 +4,7 @@ const { logger } = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
 const { transactionSchema } = require('../utils/validation');
 const { getStore } = require('../utils/persistentStore');
+const { sanitizeString } = require('../utils/sanitize');
 
 const router = express.Router();
 
@@ -75,7 +76,7 @@ router.post('/transfer', async (req, res) => {
         fromAccountId,
         toAccountId,
         amount,
-        description: description || '',
+        description: description ? sanitizeString(description) : '',
         status: 'completed',
         createdAt: new Date(),
         idempotencyKey: idempotencyKey || null,
