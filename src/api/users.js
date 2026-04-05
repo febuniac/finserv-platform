@@ -33,7 +33,8 @@ router.put('/profile', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Fixed: Only allow safe fields to be updated (Fixes #15)
+    // Fixed: Only allow safe fields to be updated (Fixes #15, #22)
+    // SECURITY: Allowlist prevents mass-assignment of role, email, id, password, etc.
     const allowedFields = ['name'];
     const updates = {};
     for (const field of allowedFields) {
