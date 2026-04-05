@@ -6,6 +6,7 @@ const { loginSchema, userSchema } = require('../utils/validation');
 const { JWT_SECRET } = require('../middleware/auth');
 const { loginRateLimiter } = require('../middleware/rateLimiter');
 const { getStore } = require('../utils/persistentStore');
+const { sanitizeString } = require('../utils/sanitize');
 
 const router = express.Router();
 
@@ -33,11 +34,12 @@ router.post('/register', async (req, res) => {
     // Fixed: Using scrypt for password hashing (Fixes #3)
     const hashedPassword = hashPassword(password);
 
+    // Sanitize user-provided name to prevent stored XSS (Fixes #20)
     users.set(email, {
       id: Date.now().toString(),
       email,
       password: hashedPassword,
-      name,
+      name: sanitizeString(name),
       role: 'user',
       createdAt: new Date(),
     });
